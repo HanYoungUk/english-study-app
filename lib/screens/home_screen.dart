@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'test_screen.dart';
 import 'wrong_note_screen.dart';
+import 'record_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -347,6 +348,41 @@ class _HomeScreenState extends State<HomeScreen> {
                               borderRadius: BorderRadius.circular(16),
                             ),
                             elevation: 0,
+                          ),
+                        ),
+                      ),
+                    ],
+
+                    // 발음 녹음 버튼
+                    if (_entriesForSelected()
+                        .any((e) => e['word']!.isNotEmpty && e['meaning']!.isNotEmpty)) ...[
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => RecordScreen(
+                                day: _selectedDay,
+                                person: _selectedPerson,
+                                entries: _entriesForSelected(),
+                              ),
+                            ),
+                          ),
+                          icon: const Icon(Icons.mic_outlined),
+                          label: const Text(
+                            '발음 녹음',
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF6A1B9A),
+                            side: const BorderSide(color: Color(0xFF6A1B9A)),
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
                           ),
                         ),
                       ),

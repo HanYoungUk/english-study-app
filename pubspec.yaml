@@ -39,6 +39,9 @@ dependencies:
   firebase_core: ^4.8.0
   cloud_firestore: ^6.4.0
   flutter_tts: ^4.2.0
+  record: ^6.2.0
+  audioplayers: ^6.4.0
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:
