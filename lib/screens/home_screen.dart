@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'test_screen.dart';
+import 'wrong_note_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -26,11 +28,20 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _tts.setLanguage('en-US');
+    _tts.setSpeechRate(0.45);
     _loadWords();
   }
 
   final _db = FirebaseFirestore.instance;
+  final _tts = FlutterTts();
   bool _isSaving = false;
+
+  @override
+  void dispose() {
+    _tts.stop();
+    super.dispose();
+  }
 
   Future<void> _loadWords() async {
     final snapshot = await _db.collection('words').get();
@@ -86,6 +97,20 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } finally {
       setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _saveWrongWords(
+      String person, List<Map<String, String>> wrongs) async {
+    final col =
+        _db.collection('wrong_notes').doc(person).collection('words');
+    for (final w in wrongs) {
+      final word = w['word']!;
+      if (word.isEmpty) continue;
+      final existing = await col.where('word', isEqualTo: word).get();
+      if (existing.docs.isEmpty) {
+        await col.add({'word': word, 'meaning': w['meaning']!});
+      }
     }
   }
 
@@ -253,6 +278,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       person: _selectedPerson,
                       initialEntries: _entriesForSelected(),
                       onChanged: _onEntriesChanged,
+                      tts: _tts,
                     ),
 
                     // 저장 버튼
@@ -302,6 +328,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 day: _selectedDay,
                                 person: _selectedPerson,
                                 entries: _entriesForSelected(),
+                                onWrongAnswers: (wrongs) =>
+                                    _saveWrongWords(_selectedPerson, wrongs),
                               ),
                             ),
                           ),
@@ -324,6 +352,35 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ],
 
+                    // 오답 노트 버튼
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => WrongNoteScreen(
+                                person: _selectedPerson),
+                          ),
+                        ),
+                        icon: const Icon(Icons.error_outline),
+                        label: const Text(
+                          '오답 노트',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFC62828),
+                          side: const BorderSide(color: Color(0xFFC62828)),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                      ),
+                    ),
+
                     const SizedBox(height: 24),
                   ],
                 ),
@@ -341,6 +398,7 @@ class _DayEditor extends StatefulWidget {
   final String person;
   final List<Map<String, String>> initialEntries;
   final void Function(List<Map<String, String>>) onChanged;
+  final FlutterTts tts;
 
   const _DayEditor({
     super.key,
@@ -348,6 +406,7 @@ class _DayEditor extends StatefulWidget {
     required this.person,
     required this.initialEntries,
     required this.onChanged,
+    required this.tts,
   });
 
   @override
@@ -486,6 +545,7 @@ class _DayEditorState extends State<_DayEditor> {
             itemBuilder: (_, i) {
               final isEmpty = _wordCtrls[i].text.isEmpty &&
                   _meaningCtrls[i].text.isEmpty;
+              final wordText = _wordCtrls[i].text.trim();
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -502,7 +562,20 @@ class _DayEditorState extends State<_DayEditor> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 6),
+                  // TTS 버튼
+                  SizedBox(
+                    width: 28,
+                    child: wordText.isNotEmpty
+                        ? GestureDetector(
+                            onTap: () => widget.tts.speak(wordText),
+                            child: Icon(Icons.volume_up_outlined,
+                                size: 18,
+                                color: Colors.blue.shade300),
+                          )
+                        : const SizedBox(),
+                  ),
+                  const SizedBox(width: 4),
                   // 단어 입력
                   Expanded(
                     child: TextField(

@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 enum TestMode { korToEng, engToKor }
 
@@ -7,12 +8,14 @@ class TestScreen extends StatefulWidget {
   final DateTime day;
   final String person;
   final List<Map<String, String>> entries;
+  final Future<void> Function(List<Map<String, String>>)? onWrongAnswers;
 
   const TestScreen({
     super.key,
     required this.day,
     required this.person,
     required this.entries,
+    this.onWrongAnswers,
   });
 
   @override
@@ -30,6 +33,7 @@ class _TestScreenState extends State<TestScreen> {
   bool? _isCorrect;
   int _score = 0;
   final List<Map<String, dynamic>> _results = [];
+  final _tts = FlutterTts();
 
   static const _blue = Color(0xFF1565C0);
   static const _lightBlue = Color(0xFF1E88E5);
@@ -125,9 +129,17 @@ class _TestScreenState extends State<TestScreen> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _tts.setLanguage('en-US');
+    _tts.setSpeechRate(0.45);
+  }
+
+  @override
   void dispose() {
     _answerCtrl.dispose();
     _answerFocus.dispose();
+    _tts.stop();
     super.dispose();
   }
 
@@ -276,13 +288,27 @@ class _TestScreenState extends State<TestScreen> {
                     ),
                     child: Column(
                       children: [
-                        Text(
-                          _mode == TestMode.korToEng ? '뜻' : '단어',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade400,
-                            letterSpacing: 1,
-                          ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              _mode == TestMode.korToEng ? '뜻' : '단어',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade400,
+                                letterSpacing: 1,
+                              ),
+                            ),
+                            if (_mode == TestMode.engToKor) ...[
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: () => _tts.speak(_question),
+                                child: Icon(Icons.volume_up_outlined,
+                                    size: 18,
+                                    color: Colors.blue.shade300),
+                              ),
+                            ],
+                          ],
                         ),
                         const SizedBox(height: 12),
                         Text(
@@ -481,6 +507,24 @@ class _TestScreenState extends State<TestScreen> {
   Widget _buildResult(BuildContext context) {
     final total = _quizEntries.length;
     final pct = (_score / total * 100).round();
+
+    // 틀린 단어 오답 노트 자동 저장 (한 번만)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.onWrongAnswers != null) {
+        final wrongs = _results
+            .where((r) => !(r['isCorrect'] as bool))
+            .map((r) {
+              final e = _quizEntries.firstWhere(
+                  (q) => (_mode == TestMode.korToEng
+                      ? q['meaning']
+                      : q['word']) ==
+                      r['question']);
+              return {'word': e['word']!, 'meaning': e['meaning']!};
+            })
+            .toList();
+        if (wrongs.isNotEmpty) widget.onWrongAnswers!(wrongs);
+      }
+    });
 
     return Scaffold(
       backgroundColor: const Color(0xFFF0F4FF),
