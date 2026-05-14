@@ -22,6 +22,8 @@ class _AllWordsScreenState extends State<AllWordsScreen> {
   String _searchQuery = '';
 
   late List<_WordItem> _allWords;
+  late Set<String> _activeDates;
+  late List<String> _allDates;
 
   @override
   void initState() {
@@ -40,6 +42,11 @@ class _AllWordsScreenState extends State<AllWordsScreen> {
 
   void _buildList() {
     final sortedDates = widget.wordsByDate.keys.toList()..sort();
+    _allDates = sortedDates
+        .where((d) => widget.wordsByDate[d]?[widget.person]?.isNotEmpty == true)
+        .toList();
+    _activeDates = Set.from(_allDates);
+
     final list = <_WordItem>[];
     int num = 1;
     for (final dateKey in sortedDates) {
@@ -56,13 +63,195 @@ class _AllWordsScreenState extends State<AllWordsScreen> {
   }
 
   List<_WordItem> get _filtered {
-    if (_searchQuery.isEmpty) return _allWords;
-    final q = _searchQuery.toLowerCase();
-    return _allWords
-        .where((e) =>
-            e.word.toLowerCase().contains(q) ||
-            e.meaning.toLowerCase().contains(q))
-        .toList();
+    var list = _allWords.where((e) => _activeDates.contains(e.dateKey)).toList();
+    if (_searchQuery.isNotEmpty) {
+      final q = _searchQuery.toLowerCase();
+      list = list
+          .where((e) =>
+              e.word.toLowerCase().contains(q) ||
+              e.meaning.toLowerCase().contains(q))
+          .toList();
+    }
+    return list;
+  }
+
+  bool get _isFiltered => _activeDates.length < _allDates.length;
+
+  void _showDateFilter() {
+    final tempSelected = Set<String>.from(_activeDates);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        maxChildSize: 0.9,
+        minChildSize: 0.3,
+        builder: (_, scrollCtrl) => StatefulBuilder(
+          builder: (ctx, setModal) => Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            child: Column(
+              children: [
+                const SizedBox(height: 12),
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.calendar_today, color: _blue, size: 18),
+                      const SizedBox(width: 8),
+                      const Text('날짜 필터',
+                          style: TextStyle(
+                              fontSize: 17, fontWeight: FontWeight.bold)),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => setModal(() {
+                          if (tempSelected.length == _allDates.length) {
+                            tempSelected.clear();
+                          } else {
+                            tempSelected.addAll(_allDates);
+                          }
+                        }),
+                        child: Text(
+                          tempSelected.length == _allDates.length
+                              ? '전체 해제'
+                              : '전체 선택',
+                          style: const TextStyle(color: _blue, fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: ListView.builder(
+                    controller: scrollCtrl,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    itemCount: _allDates.length,
+                    itemBuilder: (_, i) {
+                      final date = _allDates[i];
+                      final isOn = tempSelected.contains(date);
+                      final count = widget.wordsByDate[date]?[widget.person]
+                              ?.where((e) =>
+                                  (e['word'] ?? '').isNotEmpty ||
+                                  (e['meaning'] ?? '').isNotEmpty)
+                              .length ??
+                          0;
+                      return InkWell(
+                        onTap: () => setModal(() {
+                          if (isOn) {
+                            tempSelected.remove(date);
+                          } else {
+                            tempSelected.add(date);
+                          }
+                        }),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: isOn
+                                ? const Color(0xFFE3F2FD)
+                                : Colors.grey.shade50,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: isOn
+                                  ? _blue.withValues(alpha: 0.3)
+                                  : Colors.grey.shade200,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                isOn
+                                    ? Icons.check_circle
+                                    : Icons.radio_button_unchecked,
+                                color: isOn ? _blue : Colors.grey.shade300,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  _formatDate(date),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: isOn
+                                        ? Colors.black87
+                                        : Colors.grey.shade500,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                '$count개',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: isOn
+                                      ? _blue
+                                      : Colors.grey.shade400,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: tempSelected.isEmpty
+                            ? null
+                            : () {
+                                setState(() => _activeDates =
+                                    Set.from(tempSelected));
+                                Navigator.pop(ctx);
+                              },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _blue,
+                          foregroundColor: Colors.white,
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                          elevation: 0,
+                        ),
+                        child: Text(
+                          tempSelected.isEmpty
+                              ? '날짜를 선택해주세요'
+                              : '${tempSelected.length}개 날짜 적용',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   String _formatDate(String key) {
@@ -83,6 +272,31 @@ class _AllWordsScreenState extends State<AllWordsScreen> {
         foregroundColor: Colors.white,
         title: Text('전체 단어 · ${widget.person}'),
         elevation: 0,
+        actions: [
+          Stack(
+            alignment: Alignment.topRight,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.filter_list),
+                onPressed: _showDateFilter,
+                tooltip: '날짜 필터',
+              ),
+              if (_isFiltered)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Colors.amber,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -124,7 +338,9 @@ class _AllWordsScreenState extends State<AllWordsScreen> {
                 Text(
                   isSearching
                       ? '${filtered.length} / ${_allWords.length}개'
-                      : '총 ${_allWords.length}개',
+                      : _isFiltered
+                          ? '${filtered.length}개 (${_activeDates.length}개 날짜 필터 중)'
+                          : '총 ${_allWords.length}개',
                   style: TextStyle(
                     fontSize: 13,
                     color: Colors.grey.shade500,
