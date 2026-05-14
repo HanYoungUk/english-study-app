@@ -9,3 +9,4 @@ ios/Pods/
 *.iml
 .idea/
 .vscode/
+env.json

@@ -7,8 +7,10 @@ import 'package:http/http.dart' as http;
 import 'test_screen.dart';
 import 'wrong_note_screen.dart';
 import 'record_screen.dart';
+import 'stats_screen.dart';
+import 'favorites_screen.dart';
 
-const _geminiKey = 'AIzaSyDvuZZV0WOi2t7dro1oyBXzFZi8-Uiu0Ng';
+const _geminiKey = String.fromEnvironment('GEMINI_KEY');
 const _geminiUrl =
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiKey';
 
@@ -146,8 +148,37 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, String>> _entriesForSelected() =>
       _wordsByDate[_dateKey(_selectedDay)]?[_selectedPerson] ?? [];
 
+  Map<String, String>? _getDailyExpression() {
+    final all = <Map<String, String>>[];
+    for (final dateMap in _wordsByDate.values) {
+      final entries = dateMap[_selectedPerson];
+      if (entries != null) all.addAll(entries);
+    }
+    if (all.isEmpty) return null;
+    final today = DateTime.now();
+    final dayOfYear = today.difference(DateTime(today.year, 1, 1)).inDays;
+    final seed = today.year * 1000 + dayOfYear;
+    return all[seed % all.length];
+  }
+
+  List<Map<String, dynamic>> _getReviewItems() {
+    final today = DateTime.now();
+    final reviews = <Map<String, dynamic>>[];
+    for (final gap in [1, 3, 7, 14, 30]) {
+      final reviewDate = today.subtract(Duration(days: gap));
+      final key = _dateKey(reviewDate);
+      final entries = _wordsByDate[key]?[_selectedPerson];
+      if (entries != null && entries.isNotEmpty) {
+        reviews.add({'date': reviewDate, 'daysAgo': gap, 'entries': entries});
+      }
+    }
+    return reviews;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final dailyExpr = _getDailyExpression();
+    final reviewItems = _getReviewItems();
     return Scaffold(
       backgroundColor: const Color(0xFFF0F4FF),
       body: SafeArea(
@@ -223,6 +254,28 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   children: [
+                    // 오늘의 표현
+                    if (dailyExpr != null) ...[
+                      _DailyExpressionCard(
+                        word: dailyExpr['word']!,
+                        meaning: dailyExpr['meaning']!,
+                        tts: _tts,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+
+                    // 복습 알림
+                    if (reviewItems.isNotEmpty) ...[
+                      _ReviewCard(
+                        items: reviewItems,
+                        onTap: (date) => setState(() {
+                          _selectedDay = date;
+                          _focusedDay = date;
+                        }),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+
                     // 달력
                     Container(
                       decoration: BoxDecoration(
@@ -441,6 +494,66 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
 
+                    // 학습 통계 + 즐겨찾기 버튼
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => StatsScreen(
+                                    person: _selectedPerson),
+                              ),
+                            ),
+                            icon: const Icon(Icons.bar_chart_outlined),
+                            label: const Text('학습 통계',
+                                style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF1565C0),
+                              side: const BorderSide(
+                                  color: Color(0xFF1565C0)),
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => FavoritesScreen(
+                                    initialPerson: _selectedPerson),
+                              ),
+                            ),
+                            icon: const Icon(Icons.star_outlined),
+                            label: const Text('즐겨찾기',
+                                style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.amber.shade700,
+                              side:
+                                  BorderSide(color: Colors.amber.shade700),
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
                     const SizedBox(height: 24),
                   ],
                 ),
@@ -480,6 +593,54 @@ class _DayEditorState extends State<_DayEditor> {
   late List<FocusNode> _meaningNodes;
 
   static const _blue = Color(0xFF1565C0);
+  final _db = FirebaseFirestore.instance;
+  Map<String, String> _favWordToDocId = {};
+
+  Future<void> _loadFavorites() async {
+    try {
+      final snap = await _db
+          .collection('favorites')
+          .doc(widget.person)
+          .collection('words')
+          .get();
+      final map = <String, String>{};
+      for (final doc in snap.docs) {
+        final word = doc.data()['word'] as String? ?? '';
+        if (word.isNotEmpty) map[word] = doc.id;
+      }
+      if (mounted) setState(() => _favWordToDocId = map);
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFavorite(int i) async {
+    final word = _wordCtrls[i].text.trim();
+    final meaning = _meaningCtrls[i].text.trim();
+    if (word.isEmpty) return;
+    final dayKey =
+        '${widget.day.year}-${widget.day.month.toString().padLeft(2, '0')}-${widget.day.day.toString().padLeft(2, '0')}';
+    if (_favWordToDocId.containsKey(word)) {
+      final docId = _favWordToDocId[word]!;
+      await _db
+          .collection('favorites')
+          .doc(widget.person)
+          .collection('words')
+          .doc(docId)
+          .delete();
+      if (mounted) setState(() => _favWordToDocId.remove(word));
+    } else {
+      final ref = await _db
+          .collection('favorites')
+          .doc(widget.person)
+          .collection('words')
+          .add({
+        'word': word,
+        'meaning': meaning,
+        'dateKey': dayKey,
+        'addedAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) setState(() => _favWordToDocId[word] = ref.id);
+    }
+  }
 
   @override
   void initState() {
@@ -493,6 +654,7 @@ class _DayEditorState extends State<_DayEditor> {
     _wordNodes = List.generate(widget.initialEntries.length, (_) => FocusNode());
     _meaningNodes = List.generate(widget.initialEntries.length, (_) => FocusNode());
     _addEmptyRow();
+    _loadFavorites();
   }
 
   @override
@@ -1014,8 +1176,8 @@ English sentence. (한국어 뜻)''';
                       ),
                     ),
                   ),
-                  // 개별 삭제 버튼
-                  if (!isEmpty)
+                  // 개별 삭제 + 즐겨찾기 버튼
+                  if (!isEmpty) ...[
                     GestureDetector(
                       onTap: () => setState(() => _deleteRow(i)),
                       child: Padding(
@@ -1023,13 +1185,175 @@ English sentence. (한국어 뜻)''';
                         child: Icon(Icons.close,
                             size: 16, color: Colors.grey.shade400),
                       ),
-                    )
-                  else
+                    ),
+                    GestureDetector(
+                      onTap: () => _toggleFavorite(i),
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Icon(
+                          _favWordToDocId.containsKey(wordText)
+                              ? Icons.star
+                              : Icons.star_border,
+                          size: 16,
+                          color: _favWordToDocId.containsKey(wordText)
+                              ? Colors.amber
+                              : Colors.grey.shade300,
+                        ),
+                      ),
+                    ),
+                  ] else
                     const SizedBox(width: 20),
                 ],
               );
             },
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DailyExpressionCard extends StatelessWidget {
+  final String word;
+  final String meaning;
+  final FlutterTts tts;
+  const _DailyExpressionCard(
+      {required this.word, required this.meaning, required this.tts});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1565C0), Color(0xFF1E88E5)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 3))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.wb_sunny_outlined,
+                  color: Colors.white70, size: 15),
+              const SizedBox(width: 6),
+              const Text(
+                '오늘의 표현',
+                style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => tts.speak(word),
+                child: const Icon(Icons.volume_up_outlined,
+                    color: Colors.white70, size: 20),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(word,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(meaning,
+              style:
+                  const TextStyle(color: Colors.white70, fontSize: 14)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReviewCard extends StatelessWidget {
+  final List<Map<String, dynamic>> items;
+  final void Function(DateTime) onTap;
+  const _ReviewCard({required this.items, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.notifications_outlined,
+                  color: Colors.orange.shade700, size: 17),
+              const SizedBox(width: 6),
+              Text(
+                '복습할 시간이에요!',
+                style: TextStyle(
+                    color: Colors.orange.shade800,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...items.map((item) {
+            final date = item['date'] as DateTime;
+            final daysAgo = item['daysAgo'] as int;
+            final entries = item['entries'] as List;
+            return GestureDetector(
+              onTap: () => onTap(date),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(10)),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                          color: Colors.orange.shade100,
+                          borderRadius: BorderRadius.circular(6)),
+                      child: Text(
+                        '$daysAgo일 전',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.orange.shade700,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      '${date.month}/${date.day} 학습 ${entries.length}개',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    const Spacer(),
+                    Icon(Icons.arrow_forward_ios,
+                        size: 12, color: Colors.grey.shade400),
+                  ],
+                ),
+              ),
+            );
+          }),
         ],
       ),
     );
