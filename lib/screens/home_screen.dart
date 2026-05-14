@@ -17,30 +17,43 @@ const _geminiUrl =
 
 List<Map<String, String>> _parseWordEntries(String text) {
   final results = <Map<String, String>>[];
-  final numPrefix = RegExp(r'^\d+\.\s*');
+  final numPrefix = RegExp(r'^\d+[\.\)]\s*');
+  // matches: sentence (meaning) or sentence - meaning or sentence : meaning
   final parenFormat = RegExp(r'^(.+?)\s*[（(]([^)）]+)[）)]');
-  final leadingParen = RegExp(r'^\([^)）]+\)\s+');
+  final dashFormat = RegExp(r'^(.+?)\s+[-–—]\s+(.+)$');
+  final colonFormat = RegExp(r'^(.+?)\s+:\s+(.+)$');
 
   for (final raw in text.split('\n')) {
     final line = raw.trim();
     if (line.isEmpty) continue;
     final stripped = line.replaceFirst(numPrefix, '').trim();
     if (stripped.isEmpty) continue;
+
+    // skip header/separator lines
+    if (stripped.startsWith('---') || stripped.startsWith('===')) continue;
+    if (stripped.startsWith('[') || stripped.startsWith('#')) continue;
+
     String word = '';
     String meaning = '';
-    if (stripped.contains(' : ')) {
-      final idx = stripped.indexOf(' : ');
-      word = stripped.substring(0, idx).trim();
-      final full = stripped.substring(idx + 3).trim();
-      meaning = full.replaceFirst(leadingParen, '').trim();
-      if (meaning.isEmpty) meaning = full;
+
+    final parenMatch = parenFormat.firstMatch(stripped);
+    if (parenMatch != null) {
+      word = parenMatch.group(1)!.trim().replaceAll(RegExp(r'\*+'), '');
+      meaning = parenMatch.group(2)!.trim();
+    } else if (stripped.contains(' : ')) {
+      final colonMatch = colonFormat.firstMatch(stripped);
+      if (colonMatch != null) {
+        word = colonMatch.group(1)!.trim().replaceAll(RegExp(r'\*+'), '');
+        meaning = colonMatch.group(2)!.trim();
+      }
     } else {
-      final m = parenFormat.firstMatch(stripped);
-      if (m != null) {
-        word = m.group(1)!.trim();
-        meaning = m.group(2)!.trim();
+      final dashMatch = dashFormat.firstMatch(stripped);
+      if (dashMatch != null) {
+        word = dashMatch.group(1)!.trim().replaceAll(RegExp(r'\*+'), '');
+        meaning = dashMatch.group(2)!.trim();
       }
     }
+
     if (word.isNotEmpty && meaning.isNotEmpty) {
       results.add({'word': word, 'meaning': meaning});
     }
@@ -1497,25 +1510,31 @@ class _AiSuggestionsSheetState extends State<_AiSuggestionsSheet> {
     final theme = _themeCtrl.text.trim();
     final sampleLines = widget.allExisting
         .where((e) => (e['word'] ?? '').isNotEmpty)
-        .take(20)
+        .take(10)
         .map((e) => '${e['word']} (${e['meaning']})')
         .join('\n');
+    // avoid list capped at 80 to keep prompt size manageable
     final avoidLines = widget.allExisting
         .where((e) => (e['word'] ?? '').isNotEmpty)
+        .take(80)
         .map((e) => e['word']!)
-        .join('\n');
+        .join(', ');
 
-    final themeSection = theme.isNotEmpty ? '\n[요청 테마]\n$theme\n' : '';
+    final themeSection = theme.isNotEmpty ? '\n테마: $theme\n' : '';
     final styleSection =
-        sampleLines.isNotEmpty ? '\n[학습 스타일 예시]\n$sampleLines\n' : '';
+        sampleLines.isNotEmpty ? '\n스타일 예시:\n$sampleLines\n' : '';
     final avoidSection = avoidLines.isNotEmpty
-        ? '\n[이미 배운 표현 - 절대 포함하지 마세요]\n$avoidLines\n'
+        ? '\n다음 표현은 제외하세요: $avoidLines\n'
         : '';
 
     final prompt =
-        '영어 표현 $_count개를 만들어주세요.$themeSection$styleSection$avoidSection'
-        '반드시 아래 형식으로만 출력하세요 (번호, 설명 없이):\n'
-        'English sentence. (한국어 뜻)';
+        '다음 조건으로 영어 표현 $actualCount개를 생성하세요.$themeSection$styleSection$avoidSection\n'
+        '출력 규칙:\n'
+        '- 총 $actualCount줄 출력\n'
+        '- 각 줄 형식: 영어문장 (한국어뜻)\n'
+        '- 번호, 기호, 설명 없이 위 형식만 출력\n'
+        '- 예시: I need some fresh air. (신선한 공기가 필요해.)\n'
+        '지금 바로 $actualCount개 출력하세요:';
 
     try {
       final res = await http.post(
@@ -1529,7 +1548,7 @@ class _AiSuggestionsSheetState extends State<_AiSuggestionsSheet> {
               ]
             }
           ],
-          'generationConfig': {'temperature': 0.8, 'maxOutputTokens': 4096},
+          'generationConfig': {'temperature': 0.8, 'maxOutputTokens': 16384},
         }),
       );
       if (res.statusCode == 200) {
@@ -1538,6 +1557,7 @@ class _AiSuggestionsSheetState extends State<_AiSuggestionsSheet> {
             data['candidates']?[0]?['content']?['parts']?[0]?['text'] as String? ?? '';
         final parsed = _parseWordEntries(text)
             .where((e) => !widget.existingSet.contains(e['word']!.toLowerCase()))
+            .take(actualCount)
             .toList();
         setState(() {
           _suggestions = parsed;
@@ -1646,7 +1666,7 @@ class _AiSuggestionsSheetState extends State<_AiSuggestionsSheet> {
                           spacing: 10,
                           runSpacing: 10,
                           children: [
-                            ...[10, 20, 30, 50].map((n) {
+                            ...[10, 20, 30, 50, 100, 300].map((n) {
                               final sel = _count == n;
                               return GestureDetector(
                                 onTap: () => setState(() => _count = n),
@@ -1695,7 +1715,7 @@ class _AiSuggestionsSheetState extends State<_AiSuggestionsSheet> {
                             controller: _customCountCtrl,
                             keyboardType: TextInputType.number,
                             decoration: InputDecoration(
-                              hintText: '개수 입력 (예: 15)',
+                              hintText: '개수 입력 (최대 300)',
                               hintStyle: TextStyle(
                                   color: Colors.grey.shade400, fontSize: 13),
                               border: OutlineInputBorder(
