@@ -9,6 +9,7 @@ import 'wrong_note_screen.dart';
 import 'record_screen.dart';
 import 'stats_screen.dart';
 import 'favorites_screen.dart';
+import 'all_words_screen.dart';
 
 const _geminiKey = String.fromEnvironment('GEMINI_KEY');
 const _geminiUrl =
@@ -552,6 +553,37 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ],
+                    ),
+
+                    // 전체 단어 목록 버튼
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => AllWordsScreen(
+                              person: _selectedPerson,
+                              wordsByDate: _wordsByDate,
+                            ),
+                          ),
+                        ),
+                        icon: const Icon(Icons.format_list_numbered),
+                        label: const Text(
+                          '전체 단어 목록',
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.bold),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF00695C),
+                          side: const BorderSide(color: Color(0xFF00695C)),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                      ),
                     ),
 
                     const SizedBox(height: 24),
