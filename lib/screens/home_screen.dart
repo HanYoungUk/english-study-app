@@ -951,67 +951,109 @@ English sentence. (한국어 뜻)''';
                     ),
                   )
                 else
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () async {
-                        final parsed = _parseText(textCtrl.text);
-                        if (parsed.isEmpty) return;
-                        final deduped = _deduplicate(parsed);
-
-                        setModal(() => loading = true);
-                        List<Map<String, String>> more = [];
-                        String? aiError;
-                        try {
-                          more = await _fetchMoreFromGemini(parsed);
-                        } catch (e) {
-                          aiError = e.toString().replaceFirst('Exception: ', '');
-                        } finally {
-                          setModal(() => loading = false);
-                        }
-
-                        setState(() => _addRows([...deduped, ...more]));
-                        if (ctx.mounted) Navigator.pop(ctx);
-
-                        final added = deduped.length + more.length;
-                        final skipped = parsed.length - deduped.length;
-                        if (context.mounted) {
-                          if (aiError != null) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                              content: Text('파싱 ${deduped.length}개 추가됨 / AI 오류: $aiError'),
-                              backgroundColor: Colors.orange.shade700,
-                              behavior: SnackBarBehavior.floating,
-                              duration: const Duration(seconds: 6),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10)),
-                            ));
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                              content: Text(
-                                '$added개 추가됨'
-                                '${skipped > 0 ? ' ($skipped개 중복 제외)' : ''}'
-                                '${more.isNotEmpty ? ', AI로 ${more.length}개 추가' : ''}',
-                              ),
-                              backgroundColor: const Color(0xFF1565C0),
-                              behavior: SnackBarBehavior.floating,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10)),
-                            ));
-                          }
-                        }
-                      },
-                      icon: const Icon(Icons.auto_awesome, size: 18),
-                      label: const Text('파싱 + AI 자동 추가',
-                          style: TextStyle(fontWeight: FontWeight.bold)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1565C0),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                        elevation: 0,
+                  Column(
+                    children: [
+                      // 바로 추가 (AI 없이 즉시)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            final parsed = _parseText(textCtrl.text);
+                            if (parsed.isEmpty) return;
+                            final deduped = _deduplicate(parsed);
+                            setState(() => _addRows(deduped));
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            final skipped = parsed.length - deduped.length;
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text(
+                                  '${deduped.length}개 추가됨'
+                                  '${skipped > 0 ? ' ($skipped개 중복 제외)' : ''}',
+                                ),
+                                backgroundColor: const Color(0xFF1565C0),
+                                behavior: SnackBarBehavior.floating,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                              ));
+                            }
+                          },
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('바로 추가',
+                              style: TextStyle(fontWeight: FontWeight.bold)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1565C0),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            elevation: 0,
+                          ),
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 8),
+                      // AI도 함께 추가
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            final parsed = _parseText(textCtrl.text);
+                            if (parsed.isEmpty) return;
+                            final deduped = _deduplicate(parsed);
+
+                            setModal(() => loading = true);
+                            List<Map<String, String>> more = [];
+                            String? aiError;
+                            try {
+                              more = await _fetchMoreFromGemini(parsed);
+                            } catch (e) {
+                              aiError = e.toString().replaceFirst('Exception: ', '');
+                            } finally {
+                              setModal(() => loading = false);
+                            }
+
+                            setState(() => _addRows([...deduped, ...more]));
+                            if (ctx.mounted) Navigator.pop(ctx);
+
+                            final added = deduped.length + more.length;
+                            final skipped = parsed.length - deduped.length;
+                            if (context.mounted) {
+                              if (aiError != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                  content: Text('파싱 ${deduped.length}개 추가됨 / AI 오류: $aiError'),
+                                  backgroundColor: Colors.orange.shade700,
+                                  behavior: SnackBarBehavior.floating,
+                                  duration: const Duration(seconds: 6),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                ));
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                  content: Text(
+                                    '$added개 추가됨'
+                                    '${skipped > 0 ? ' ($skipped개 중복 제외)' : ''}'
+                                    '${more.isNotEmpty ? ', AI로 ${more.length}개 추가' : ''}',
+                                  ),
+                                  backgroundColor: const Color(0xFF1565C0),
+                                  behavior: SnackBarBehavior.floating,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                ));
+                              }
+                            }
+                          },
+                          icon: const Icon(Icons.auto_awesome, size: 18),
+                          label: const Text('파싱 + AI 자동 추가',
+                              style: TextStyle(fontWeight: FontWeight.bold)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF1565C0),
+                            side: const BorderSide(color: Color(0xFF1565C0)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
               ],
             ),
