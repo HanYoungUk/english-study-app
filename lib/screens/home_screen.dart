@@ -197,7 +197,8 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_, scrollCtrl) {
           // phase: 'settings' | 'loading' | 'results' | 'error'
           String phase = 'settings';
-          int count = 30;
+          int count = 30;        // -1 = 직접 입력
+          final customCountCtrl = TextEditingController();
           final themeCtrl = TextEditingController();
           List<Map<String, String>> suggestions = [];
           List<bool> selected = [];
@@ -206,7 +207,13 @@ class _HomeScreenState extends State<HomeScreen> {
           return StatefulBuilder(
             builder: (ctx, setModal) {
               Future<void> generate() async {
-                setModal(() => phase = 'loading');
+                final actualCount = count == -1
+                    ? (int.tryParse(customCountCtrl.text.trim()) ?? 30)
+                    : count;
+                setModal(() {
+                  count = actualCount;
+                  phase = 'loading';
+                });
                 final theme = themeCtrl.text.trim();
                 final sampleLines = allExisting
                     .where((e) => (e['word'] ?? '').isNotEmpty)
@@ -371,34 +378,90 @@ class _HomeScreenState extends State<HomeScreen> {
                                 const SizedBox(height: 12),
                                 Wrap(
                                   spacing: 10,
-                                  children: [10, 20, 30, 50].map((n) {
-                                    final sel = count == n;
-                                    return GestureDetector(
+                                  runSpacing: 10,
+                                  children: [
+                                    ...[10, 20, 30, 50].map((n) {
+                                      final sel = count == n;
+                                      return GestureDetector(
+                                        onTap: () =>
+                                            setModal(() => count = n),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 22, vertical: 10),
+                                          decoration: BoxDecoration(
+                                            color: sel
+                                                ? const Color(0xFF7B1FA2)
+                                                : Colors.grey.shade100,
+                                            borderRadius:
+                                                BorderRadius.circular(20),
+                                          ),
+                                          child: Text(
+                                            '$n개',
+                                            style: TextStyle(
+                                              color: sel
+                                                  ? Colors.white
+                                                  : Colors.black87,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                    // 직접 입력 칩
+                                    GestureDetector(
                                       onTap: () =>
-                                          setModal(() => count = n),
+                                          setModal(() => count = -1),
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 22, vertical: 10),
                                         decoration: BoxDecoration(
-                                          color: sel
+                                          color: count == -1
                                               ? const Color(0xFF7B1FA2)
                                               : Colors.grey.shade100,
                                           borderRadius:
                                               BorderRadius.circular(20),
                                         ),
                                         child: Text(
-                                          '$n개',
+                                          '직접 입력',
                                           style: TextStyle(
-                                            color: sel
+                                            color: count == -1
                                                 ? Colors.white
                                                 : Colors.black87,
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
                                       ),
-                                    );
-                                  }).toList(),
+                                    ),
+                                  ],
                                 ),
+                                if (count == -1) ...[
+                                  const SizedBox(height: 12),
+                                  TextField(
+                                    controller: customCountCtrl,
+                                    keyboardType: TextInputType.number,
+                                    decoration: InputDecoration(
+                                      hintText: '개수 입력 (예: 15)',
+                                      hintStyle: TextStyle(
+                                          color: Colors.grey.shade400,
+                                          fontSize: 13),
+                                      border: OutlineInputBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(12),
+                                        borderSide: BorderSide(
+                                            color: Colors.grey.shade300),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(12),
+                                        borderSide: const BorderSide(
+                                            color: Color(0xFF7B1FA2)),
+                                      ),
+                                      contentPadding:
+                                          const EdgeInsets.all(12),
+                                      suffixText: '개',
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 24),
                                 // 테마 입력
                                 const Text('테마 (선택)',
@@ -591,7 +654,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   icon: const Icon(Icons.auto_awesome,
                                       size: 18),
                                   label: Text(
-                                    'AI로 $count개 생성',
+                                    count == -1 ? 'AI로 생성' : 'AI로 $count개 생성',
                                     style: const TextStyle(
                                         fontWeight: FontWeight.bold),
                                   ),
