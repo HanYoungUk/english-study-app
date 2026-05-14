@@ -15,6 +15,39 @@ const _geminiKey = String.fromEnvironment('GEMINI_KEY');
 const _geminiUrl =
     'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiKey';
 
+List<Map<String, String>> _parseWordEntries(String text) {
+  final results = <Map<String, String>>[];
+  final numPrefix = RegExp(r'^\d+\.\s*');
+  final parenFormat = RegExp(r'^(.+?)\s*[（(]([^)）]+)[）)]');
+  final leadingParen = RegExp(r'^\([^)）]+\)\s+');
+
+  for (final raw in text.split('\n')) {
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    final stripped = line.replaceFirst(numPrefix, '').trim();
+    if (stripped.isEmpty) continue;
+    String word = '';
+    String meaning = '';
+    if (stripped.contains(' : ')) {
+      final idx = stripped.indexOf(' : ');
+      word = stripped.substring(0, idx).trim();
+      final full = stripped.substring(idx + 3).trim();
+      meaning = full.replaceFirst(leadingParen, '').trim();
+      if (meaning.isEmpty) meaning = full;
+    } else {
+      final m = parenFormat.firstMatch(stripped);
+      if (m != null) {
+        word = m.group(1)!.trim();
+        meaning = m.group(2)!.trim();
+      }
+    }
+    if (word.isNotEmpty && meaning.isNotEmpty) {
+      results.add({'word': word, 'meaning': meaning});
+    }
+  }
+  return results;
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -50,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _db = FirebaseFirestore.instance;
   final _tts = FlutterTts();
   bool _isSaving = false;
+  int _editorRefreshKey = 0;
 
   @override
   void dispose() {
@@ -139,6 +173,516 @@ class _HomeScreenState extends State<HomeScreen> {
         _wordsByDate[key]![_selectedPerson] = entries;
       }
     });
+  }
+
+  void _showAiSuggestions(BuildContext context) {
+    final allExisting = <Map<String, String>>[];
+    for (final dateMap in _wordsByDate.values) {
+      final entries = dateMap[_selectedPerson];
+      if (entries != null) allExisting.addAll(entries);
+    }
+    final existingSet = allExisting
+        .map((e) => (e['word'] ?? '').toLowerCase().trim())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        maxChildSize: 0.95,
+        minChildSize: 0.4,
+        builder: (_, scrollCtrl) {
+          // phase: 'settings' | 'loading' | 'results' | 'error'
+          String phase = 'settings';
+          int count = 30;
+          final themeCtrl = TextEditingController();
+          List<Map<String, String>> suggestions = [];
+          List<bool> selected = [];
+          String errorMsg = '';
+
+          return StatefulBuilder(
+            builder: (ctx, setModal) {
+              Future<void> generate() async {
+                setModal(() => phase = 'loading');
+                final theme = themeCtrl.text.trim();
+                final sampleLines = allExisting
+                    .where((e) => (e['word'] ?? '').isNotEmpty)
+                    .take(20)
+                    .map((e) => '${e['word']} (${e['meaning']})')
+                    .join('\n');
+                final avoidLines = allExisting
+                    .where((e) => (e['word'] ?? '').isNotEmpty)
+                    .map((e) => e['word']!)
+                    .join('\n');
+
+                final themeSection = theme.isNotEmpty
+                    ? '\n[요청 테마]\n$theme\n'
+                    : '';
+                final styleSection = sampleLines.isNotEmpty
+                    ? '\n[학습 스타일 예시]\n$sampleLines\n'
+                    : '';
+                final avoidSection = avoidLines.isNotEmpty
+                    ? '\n[이미 배운 표현 - 절대 포함하지 마세요]\n$avoidLines\n'
+                    : '';
+
+                final prompt =
+                    '영어 표현 $count개를 만들어주세요.$themeSection$styleSection$avoidSection'
+                    '반드시 아래 형식으로만 출력하세요 (번호, 설명 없이):\n'
+                    'English sentence. (한국어 뜻)';
+
+                try {
+                  final res = await http.post(
+                    Uri.parse(_geminiUrl),
+                    headers: {'Content-Type': 'application/json'},
+                    body: jsonEncode({
+                      'contents': [
+                        {
+                          'parts': [
+                            {'text': prompt}
+                          ]
+                        }
+                      ],
+                      'generationConfig': {
+                        'temperature': 0.8,
+                        'maxOutputTokens': 4096
+                      },
+                    }),
+                  );
+                  if (res.statusCode == 200) {
+                    final data =
+                        jsonDecode(res.body) as Map<String, dynamic>;
+                    final text = data['candidates']?[0]?['content']
+                            ?['parts']?[0]?['text'] as String? ??
+                        '';
+                    final parsed = _parseWordEntries(text)
+                        .where((e) => !existingSet
+                            .contains(e['word']!.toLowerCase()))
+                        .toList();
+                    setModal(() {
+                      suggestions = parsed;
+                      selected = List.filled(parsed.length, true);
+                      phase = 'results';
+                    });
+                  } else {
+                    String msg = 'HTTP ${res.statusCode}';
+                    try {
+                      final d =
+                          jsonDecode(res.body) as Map<String, dynamic>;
+                      msg = d['error']?['message'] as String? ?? msg;
+                    } catch (_) {}
+                    setModal(() {
+                      errorMsg = msg;
+                      phase = 'error';
+                    });
+                  }
+                } catch (e) {
+                  setModal(() {
+                    errorMsg = e.toString();
+                    phase = 'error';
+                  });
+                }
+              }
+
+              final checkedCount =
+                  selected.isEmpty ? 0 : selected.where((v) => v).length;
+
+              return Container(
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius:
+                      BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 12),
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade300,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // 헤더
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.auto_awesome,
+                              color: Color(0xFF7B1FA2), size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            'AI 표현 추천 · $_selectedPerson',
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (phase == 'results')
+                            TextButton(
+                              onPressed: () => setModal(() {
+                                final allTrue = selected.every((v) => v);
+                                for (int i = 0; i < selected.length; i++) {
+                                  selected[i] = !allTrue;
+                                }
+                              }),
+                              child: Text(
+                                selected.every((v) => v) ? '전체 해제' : '전체 선택',
+                                style: const TextStyle(
+                                    color: Color(0xFF7B1FA2), fontSize: 13),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    if (phase == 'results')
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 2, 20, 8),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            '${suggestions.length}개 생성됨 · 기존 ${allExisting.length}개 제외',
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.grey.shade500),
+                          ),
+                        ),
+                      ),
+                    const Divider(height: 1),
+                    // 본문
+                    Expanded(
+                      child: phase == 'settings'
+                          ? ListView(
+                              controller: scrollCtrl,
+                              padding:
+                                  const EdgeInsets.fromLTRB(20, 20, 20, 16),
+                              children: [
+                                // 개수 선택
+                                const Text('생성할 개수',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 15)),
+                                const SizedBox(height: 12),
+                                Wrap(
+                                  spacing: 10,
+                                  children: [10, 20, 30, 50].map((n) {
+                                    final sel = count == n;
+                                    return GestureDetector(
+                                      onTap: () =>
+                                          setModal(() => count = n),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 22, vertical: 10),
+                                        decoration: BoxDecoration(
+                                          color: sel
+                                              ? const Color(0xFF7B1FA2)
+                                              : Colors.grey.shade100,
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                        ),
+                                        child: Text(
+                                          '$n개',
+                                          style: TextStyle(
+                                            color: sel
+                                                ? Colors.white
+                                                : Colors.black87,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                                const SizedBox(height: 24),
+                                // 테마 입력
+                                const Text('테마 (선택)',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 15)),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '비워두면 기존 단어와 비슷한 스타일로 생성해요',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade500),
+                                ),
+                                const SizedBox(height: 10),
+                                TextField(
+                                  controller: themeCtrl,
+                                  decoration: InputDecoration(
+                                    hintText: '예: 카페, 여행, 비즈니스, 감정 표현...',
+                                    hintStyle: TextStyle(
+                                        color: Colors.grey.shade400,
+                                        fontSize: 13),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: BorderSide(
+                                          color: Colors.grey.shade300),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(
+                                          color: Color(0xFF7B1FA2)),
+                                    ),
+                                    contentPadding: const EdgeInsets.all(14),
+                                  ),
+                                ),
+                                const SizedBox(height: 28),
+                                if (allExisting.isNotEmpty)
+                                  Text(
+                                    '기존 단어 ${allExisting.length}개와 겹치지 않게 생성돼요',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade400),
+                                    textAlign: TextAlign.center,
+                                  ),
+                              ],
+                            )
+                          : phase == 'loading'
+                              ? const Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      CircularProgressIndicator(
+                                          color: Color(0xFF7B1FA2)),
+                                      SizedBox(height: 14),
+                                      Text('AI가 표현을 생성하고 있어요...',
+                                          style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.grey)),
+                                    ],
+                                  ),
+                                )
+                              : phase == 'error'
+                                  ? Center(
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(24),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.error_outline,
+                                                color: Colors.red.shade300,
+                                                size: 40),
+                                            const SizedBox(height: 12),
+                                            Text(
+                                              '오류가 발생했어요\n$errorMsg',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                  color: Colors.grey.shade600,
+                                                  fontSize: 13),
+                                            ),
+                                            const SizedBox(height: 16),
+                                            TextButton(
+                                              onPressed: () => setModal(
+                                                  () => phase = 'settings'),
+                                              child: const Text('다시 설정'),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    )
+                                  : suggestions.isEmpty
+                                      ? Center(
+                                          child: Text(
+                                            '생성된 표현이 없어요',
+                                            style: TextStyle(
+                                                color: Colors.grey.shade400),
+                                          ),
+                                        )
+                                      : ListView.builder(
+                                          controller: scrollCtrl,
+                                          padding: const EdgeInsets.fromLTRB(
+                                              16, 8, 16, 16),
+                                          itemCount: suggestions.length,
+                                          itemBuilder: (_, i) {
+                                            final item = suggestions[i];
+                                            return InkWell(
+                                              onTap: () => setModal(() =>
+                                                  selected[i] = !selected[i]),
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              child: Container(
+                                                margin: const EdgeInsets.only(
+                                                    bottom: 6),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 12,
+                                                        vertical: 10),
+                                                decoration: BoxDecoration(
+                                                  color: selected[i]
+                                                      ? const Color(0xFFF3E5F5)
+                                                      : Colors.grey.shade50,
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          10),
+                                                  border: Border.all(
+                                                    color: selected[i]
+                                                        ? const Color(
+                                                                0xFF7B1FA2)
+                                                            .withValues(
+                                                                alpha: 0.3)
+                                                        : Colors.grey.shade200,
+                                                  ),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                      selected[i]
+                                                          ? Icons.check_circle
+                                                          : Icons
+                                                              .radio_button_unchecked,
+                                                      color: selected[i]
+                                                          ? const Color(
+                                                              0xFF7B1FA2)
+                                                          : Colors
+                                                              .grey.shade300,
+                                                      size: 20,
+                                                    ),
+                                                    const SizedBox(width: 10),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                          Text(
+                                                            item['word']!,
+                                                            style:
+                                                                const TextStyle(
+                                                              fontSize: 14,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                            ),
+                                                          ),
+                                                          Text(
+                                                            item['meaning']!,
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                              color: Colors.grey
+                                                                  .shade600,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                    ),
+                    // 하단 버튼
+                    SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: phase == 'settings'
+                              ? ElevatedButton.icon(
+                                  onPressed: generate,
+                                  icon: const Icon(Icons.auto_awesome,
+                                      size: 18),
+                                  label: Text(
+                                    'AI로 $count개 생성',
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF7B1FA2),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 14),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(14)),
+                                    elevation: 0,
+                                  ),
+                                )
+                              : phase == 'results'
+                                  ? ElevatedButton.icon(
+                                      onPressed: checkedCount == 0
+                                          ? null
+                                          : () {
+                                              final toAdd =
+                                                  <Map<String, String>>[];
+                                              for (int i = 0;
+                                                  i < suggestions.length;
+                                                  i++) {
+                                                if (selected[i]) {
+                                                  toAdd.add(suggestions[i]);
+                                                }
+                                              }
+                                              final key =
+                                                  _dateKey(_selectedDay);
+                                              setState(() {
+                                                _wordsByDate[key] ??= {};
+                                                final existing = List<
+                                                        Map<String, String>>.from(
+                                                    _wordsByDate[key]![
+                                                            _selectedPerson] ??
+                                                        []);
+                                                _wordsByDate[key]![
+                                                        _selectedPerson] = [
+                                                  ...existing,
+                                                  ...toAdd
+                                                ];
+                                                _editorRefreshKey++;
+                                              });
+                                              Navigator.pop(ctx);
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(SnackBar(
+                                                content: Text(
+                                                    '$checkedCount개가 추가됐어요. 저장 버튼을 눌러 저장하세요.'),
+                                                backgroundColor:
+                                                    const Color(0xFF7B1FA2),
+                                                behavior:
+                                                    SnackBarBehavior.floating,
+                                                shape: RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            10)),
+                                              ));
+                                            },
+                                      icon: const Icon(Icons.add),
+                                      label: Text(
+                                        checkedCount == 0
+                                            ? '선택된 항목이 없어요'
+                                            : '$checkedCount개 선택한 날짜에 추가',
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.bold),
+                                      ),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor:
+                                            const Color(0xFF7B1FA2),
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 14),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(14)),
+                                        elevation: 0,
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
   }
 
   bool _hasWordsOnDay(DateTime day) {
@@ -352,7 +896,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // 인라인 단어 편집기
                     _DayEditor(
-                      key: ValueKey('${_dateKey(_selectedDay)}_$_selectedPerson'),
+                      key: ValueKey('${_dateKey(_selectedDay)}_${_selectedPerson}_$_editorRefreshKey'),
                       day: _selectedDay,
                       person: _selectedPerson,
                       initialEntries: _entriesForSelected(),
@@ -555,6 +1099,29 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
 
+                    // AI 추천 버튼
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _showAiSuggestions(context),
+                        icon: const Icon(Icons.auto_awesome),
+                        label: const Text(
+                          'AI 표현 추천',
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.bold),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF7B1FA2),
+                          side: const BorderSide(color: Color(0xFF7B1FA2)),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                      ),
+                    ),
+
                     // 전체 단어 목록 버튼
                     const SizedBox(height: 12),
                     SizedBox(
@@ -700,45 +1267,8 @@ class _DayEditorState extends State<_DayEditor> {
 
   // ── 일괄 추가 ─────────────────────────────────────────
 
-  static List<Map<String, String>> _parseText(String text) {
-    final results = <Map<String, String>>[];
-    final numPrefix = RegExp(r'^\d+\.\s*');
-    final parenFormat = RegExp(r'^(.+?)\s*[（(]([^)）]+)[）)]');
-    final leadingParen = RegExp(r'^\([^)）]+\)\s+');
-
-    for (final raw in text.split('\n')) {
-      final line = raw.trim();
-      if (line.isEmpty) continue;
-
-      final stripped = line.replaceFirst(numPrefix, '').trim();
-      if (stripped.isEmpty) continue;
-
-      String word = '';
-      String meaning = '';
-
-      if (stripped.contains(' : ')) {
-        // "English sentence : (부가설명) 한국어 뜻" 또는 "English : 한국어 뜻 (부가설명)" 형식
-        final idx = stripped.indexOf(' : ');
-        word = stripped.substring(0, idx).trim();
-        final full = stripped.substring(idx + 3).trim();
-        // 앞에 "(상황설명) 실제뜻" 패턴이면 괄호 설명 제거
-        meaning = full.replaceFirst(leadingParen, '').trim();
-        if (meaning.isEmpty) meaning = full;
-      } else {
-        // "English sentence (한국어 뜻)" 기존 형식
-        final m = parenFormat.firstMatch(stripped);
-        if (m != null) {
-          word = m.group(1)!.trim();
-          meaning = m.group(2)!.trim();
-        }
-      }
-
-      if (word.isNotEmpty && meaning.isNotEmpty) {
-        results.add({'word': word, 'meaning': meaning});
-      }
-    }
-    return results;
-  }
+  static List<Map<String, String>> _parseText(String text) =>
+      _parseWordEntries(text);
 
   List<Map<String, String>> _deduplicate(List<Map<String, String>> incoming) {
     final existing = _wordCtrls
