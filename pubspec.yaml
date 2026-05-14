@@ -42,6 +42,7 @@ dependencies:
   record: ^6.2.0
   audioplayers: ^6.4.0
   path_provider: ^2.1.5
+  http: ^1.2.2
 
 dev_dependencies:
   flutter_test:

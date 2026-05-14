@@ -1,10 +1,16 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:http/http.dart' as http;
 import 'test_screen.dart';
 import 'wrong_note_screen.dart';
 import 'record_screen.dart';
+
+const _geminiKey = 'AIzaSyDvuZZV0WOi2t7dro1oyBXzFZi8-Uiu0Ng';
+const _geminiUrl =
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiKey';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -22,6 +28,10 @@ class _HomeScreenState extends State<HomeScreen> {
   static const _blue = Color(0xFF1565C0);
   static const _lightBlue = Color(0xFF1E88E5);
   static const _persons = ['영욱', '준형'];
+  static const _displayNames = {
+    '영욱': '영욱',
+    '준형': '내기 매일 지는 준형이형',
+  };
 
   String _dateKey(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -176,15 +186,29 @@ class _HomeScreenState extends State<HomeScreen> {
                               width: 1.5,
                             ),
                           ),
-                          child: Text(
-                            p,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: isSelected ? _blue : Colors.white,
-                              letterSpacing: 1,
-                            ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (p == '준형')
+                                const Text('🍔', style: TextStyle(fontSize: 20)),
+                              if (p == '준형') const SizedBox(width: 4),
+                              Flexible(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    _displayNames[p] ?? p,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: isSelected ? _blue : Colors.white,
+                                      letterSpacing: 1,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -480,6 +504,311 @@ class _DayEditorState extends State<_DayEditor> {
     super.dispose();
   }
 
+  // ── 일괄 추가 ─────────────────────────────────────────
+
+  static List<Map<String, String>> _parseText(String text) {
+    final results = <Map<String, String>>[];
+    final numPrefix = RegExp(r'^\d+\.\s*');
+    final parenFormat = RegExp(r'^(.+?)\s*[（(]([^)）]+)[）)]');
+    final leadingParen = RegExp(r'^\([^)）]+\)\s+');
+
+    for (final raw in text.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+
+      final stripped = line.replaceFirst(numPrefix, '').trim();
+      if (stripped.isEmpty) continue;
+
+      String word = '';
+      String meaning = '';
+
+      if (stripped.contains(' : ')) {
+        // "English sentence : (부가설명) 한국어 뜻" 또는 "English : 한국어 뜻 (부가설명)" 형식
+        final idx = stripped.indexOf(' : ');
+        word = stripped.substring(0, idx).trim();
+        final full = stripped.substring(idx + 3).trim();
+        // 앞에 "(상황설명) 실제뜻" 패턴이면 괄호 설명 제거
+        meaning = full.replaceFirst(leadingParen, '').trim();
+        if (meaning.isEmpty) meaning = full;
+      } else {
+        // "English sentence (한국어 뜻)" 기존 형식
+        final m = parenFormat.firstMatch(stripped);
+        if (m != null) {
+          word = m.group(1)!.trim();
+          meaning = m.group(2)!.trim();
+        }
+      }
+
+      if (word.isNotEmpty && meaning.isNotEmpty) {
+        results.add({'word': word, 'meaning': meaning});
+      }
+    }
+    return results;
+  }
+
+  List<Map<String, String>> _deduplicate(List<Map<String, String>> incoming) {
+    final existing = _wordCtrls
+        .map((c) => c.text.trim().toLowerCase())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+    return incoming
+        .where((e) => !existing.contains(e['word']!.toLowerCase()))
+        .toList();
+  }
+
+  Future<List<Map<String, String>>> _fetchMoreFromGemini(
+      List<Map<String, String>> sample) async {
+    final examples = sample
+        .take(10)
+        .map((e) => '${e['word']} (${e['meaning']})')
+        .join('\n');
+    final prompt = '''다음은 영어 표현 학습 목록입니다:
+$examples
+
+위와 같은 주제/상황에서 쓰는 영어 표현 20개를 추가로 만들어주세요.
+- 위 목록과 겹치지 않아야 해요
+- 반드시 아래 형식으로만 출력하세요 (번호, 설명 없이):
+English sentence. (한국어 뜻)''';
+
+    final res = await http.post(
+      Uri.parse(_geminiUrl),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'contents': [
+          {
+            'parts': [
+              {'text': prompt}
+            ]
+          }
+        ],
+        'generationConfig': {'temperature': 0.7, 'maxOutputTokens': 1024},
+      }),
+    );
+
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final text = data['candidates']?[0]?['content']?['parts']?[0]?['text'] as String? ?? '';
+      return _deduplicate(_parseText(text));
+    }
+
+    // 에러 응답에서 메시지 추출
+    String errMsg = 'HTTP ${res.statusCode}';
+    try {
+      final errData = jsonDecode(res.body) as Map<String, dynamic>;
+      errMsg = errData['error']?['message'] as String? ?? errMsg;
+    } catch (_) {}
+    throw Exception(errMsg);
+  }
+
+  void _addRows(List<Map<String, String>> entries) {
+    // 마지막 빈 행 앞에 삽입
+    final insertAt = (_wordCtrls.isNotEmpty &&
+            _wordCtrls.last.text.isEmpty &&
+            _meaningCtrls.last.text.isEmpty)
+        ? _wordCtrls.length - 1
+        : _wordCtrls.length;
+
+    for (final e in entries) {
+      _wordCtrls.insert(insertAt, TextEditingController(text: e['word']));
+      _meaningCtrls.insert(insertAt, TextEditingController(text: e['meaning']));
+      _wordNodes.insert(insertAt, FocusNode());
+      _meaningNodes.insert(insertAt, FocusNode());
+    }
+    _onChanged(0);
+  }
+
+  void _showBulkImport() {
+    final textCtrl = TextEditingController();
+    bool loading = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModal) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('📋 일괄 추가',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text('1. English sentence (한국어 뜻) 형식으로 붙여넣으세요',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: textCtrl,
+                  maxLines: 8,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    hintText: '1. A table for two, please. (두 명 자리가 있을까요?)\n2. ...',
+                    hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Colors.grey.shade300),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: Color(0xFF1565C0)),
+                    ),
+                    contentPadding: const EdgeInsets.all(12),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (loading)
+                  const Center(
+                    child: Column(
+                      children: [
+                        CircularProgressIndicator(color: Color(0xFF1565C0)),
+                        SizedBox(height: 8),
+                        Text('AI로 관련 표현 생성 중...', style: TextStyle(fontSize: 13)),
+                      ],
+                    ),
+                  )
+                else
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () async {
+                        final parsed = _parseText(textCtrl.text);
+                        if (parsed.isEmpty) return;
+                        final deduped = _deduplicate(parsed);
+
+                        setModal(() => loading = true);
+                        List<Map<String, String>> more = [];
+                        String? aiError;
+                        try {
+                          more = await _fetchMoreFromGemini(parsed);
+                        } catch (e) {
+                          aiError = e.toString().replaceFirst('Exception: ', '');
+                        } finally {
+                          setModal(() => loading = false);
+                        }
+
+                        setState(() => _addRows([...deduped, ...more]));
+                        if (ctx.mounted) Navigator.pop(ctx);
+
+                        final added = deduped.length + more.length;
+                        final skipped = parsed.length - deduped.length;
+                        if (context.mounted) {
+                          if (aiError != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text('파싱 ${deduped.length}개 추가됨 / AI 오류: $aiError'),
+                              backgroundColor: Colors.orange.shade700,
+                              behavior: SnackBarBehavior.floating,
+                              duration: const Duration(seconds: 6),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                            ));
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(
+                                '$added개 추가됨'
+                                '${skipped > 0 ? ' ($skipped개 중복 제외)' : ''}'
+                                '${more.isNotEmpty ? ', AI로 ${more.length}개 추가' : ''}',
+                              ),
+                              backgroundColor: const Color(0xFF1565C0),
+                              behavior: SnackBarBehavior.floating,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                            ));
+                          }
+                        }
+                      },
+                      icon: const Icon(Icons.auto_awesome, size: 18),
+                      label: const Text('파싱 + AI 자동 추가',
+                          style: TextStyle(fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1565C0),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _deleteRow(int index) {
+    if (_wordCtrls.length <= 1) {
+      _wordCtrls[0].clear();
+      _meaningCtrls[0].clear();
+    } else {
+      _wordCtrls[index].dispose();
+      _meaningCtrls[index].dispose();
+      _wordNodes[index].dispose();
+      _meaningNodes[index].dispose();
+      _wordCtrls.removeAt(index);
+      _meaningCtrls.removeAt(index);
+      _wordNodes.removeAt(index);
+      _meaningNodes.removeAt(index);
+    }
+    _onChanged(0);
+  }
+
+  Future<void> _confirmDeleteAll() async {
+    final hasContent = _wordCtrls.any((c) => c.text.isNotEmpty);
+    if (!hasContent) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('전체 삭제', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(
+          '${widget.day.month}월 ${widget.day.day}일 · ${widget.person}\n\n모든 표현을 삭제할까요?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소', style: TextStyle(color: Colors.grey)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('삭제',
+                style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() {
+      for (final c in _wordCtrls) c.dispose();
+      for (final c in _meaningCtrls) c.dispose();
+      for (final n in _wordNodes) n.dispose();
+      for (final n in _meaningNodes) n.dispose();
+      _wordCtrls = [TextEditingController()];
+      _meaningCtrls = [TextEditingController()];
+      _wordNodes = [FocusNode()];
+      _meaningNodes = [FocusNode()];
+    });
+    widget.onChanged([]);
+  }
+
   void _addEmptyRow() {
     _wordCtrls.add(TextEditingController());
     _meaningCtrls.add(TextEditingController());
@@ -523,14 +852,38 @@ class _DayEditorState extends State<_DayEditor> {
         children: [
           // 헤더
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-            child: Text(
-              '${widget.day.month}월 ${widget.day.day}일 · ${widget.person}',
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                color: _blue,
-              ),
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
+            child: Row(
+              children: [
+                Text(
+                  '${widget.day.month}월 ${widget.day.day}일 · ${widget.person}',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: _blue,
+                  ),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _showBulkImport,
+                  icon: const Icon(Icons.auto_awesome, size: 15),
+                  label: const Text('일괄 추가', style: TextStyle(fontSize: 13)),
+                  style: TextButton.styleFrom(
+                    foregroundColor: _blue,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+                IconButton(
+                  onPressed: _confirmDeleteAll,
+                  icon: Icon(Icons.delete_sweep_outlined,
+                      size: 20, color: Colors.red.shade300),
+                  tooltip: '전체 삭제',
+                  padding: const EdgeInsets.all(6),
+                  constraints: const BoxConstraints(),
+                ),
+              ],
             ),
           ),
 
@@ -538,7 +891,7 @@ class _DayEditorState extends State<_DayEditor> {
 
           // 컬럼 헤더
           Padding(
-            padding: const EdgeInsets.fromLTRB(58, 0, 16, 4),
+            padding: const EdgeInsets.fromLTRB(58, 0, 36, 4),
             child: Row(
               children: [
                 Expanded(
@@ -661,6 +1014,18 @@ class _DayEditorState extends State<_DayEditor> {
                       ),
                     ),
                   ),
+                  // 개별 삭제 버튼
+                  if (!isEmpty)
+                    GestureDetector(
+                      onTap: () => setState(() => _deleteRow(i)),
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Icon(Icons.close,
+                            size: 16, color: Colors.grey.shade400),
+                      ),
+                    )
+                  else
+                    const SizedBox(width: 20),
                 ],
               );
             },
