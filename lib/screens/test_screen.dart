@@ -4,7 +4,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 enum TestMode { korToEng, engToKor }
-enum QuizType { subjective, multipleChoice }
+enum QuizType { subjective, multipleChoice, selfCheck }
 
 class TestScreen extends StatefulWidget {
   final DateTime day;
@@ -58,6 +58,7 @@ class _TestScreenState extends State<TestScreen> {
     setState(() {
       _mode = mode;
       _quizEntries = list;
+      _currentIndex = 0;
       _mcOptionsCache.clear();
     });
   }
@@ -137,6 +138,21 @@ class _TestScreenState extends State<TestScreen> {
         'user': answer,
         'isCorrect': correct,
       });
+    });
+  }
+
+  void _selfCheck(bool correct) {
+    final e = _quizEntries[_currentIndex];
+    setState(() {
+      if (correct) _score++;
+      _results.add({
+        'question': e['word']!,
+        'correct': e['word']!,
+        'user': correct ? e['word']! : '실패',
+        'isCorrect': correct,
+      });
+      _currentIndex++;
+      _hintLevel = 0;
     });
   }
 
@@ -230,7 +246,7 @@ class _TestScreenState extends State<TestScreen> {
 
             const SizedBox(height: 12),
 
-            // 주관식 / 객관식 토글
+            // 주관식 / 객관식 / 셀프체크 토글
             _buildToggleRow([
               _ToggleItem(label: '주관식', icon: Icons.edit_outlined, selected: _quizType == QuizType.subjective, onTap: () => setState(() => _quizType = QuizType.subjective)),
               _ToggleItem(
@@ -242,8 +258,9 @@ class _TestScreenState extends State<TestScreen> {
                     : null,
                 disabled: _validEntries.length < 4,
               ),
+              _ToggleItem(label: '셀프체크', icon: Icons.fact_check_outlined, selected: _quizType == QuizType.selfCheck, onTap: () => setState(() => _quizType = QuizType.selfCheck)),
             ]),
-            if (_validEntries.length < 4)
+            if (_validEntries.length < 4 && _quizType == QuizType.multipleChoice)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
@@ -253,19 +270,28 @@ class _TestScreenState extends State<TestScreen> {
               ),
 
             const SizedBox(height: 24),
-            _ModeCard(
-              icon: Icons.translate,
-              title: '한 → 영',
-              subtitle: '한국어 뜻을 보고 영어 단어 맞추기',
-              onTap: () => _startTest(TestMode.korToEng),
-            ),
-            const SizedBox(height: 16),
-            _ModeCard(
-              icon: Icons.spellcheck,
-              title: '영 → 한',
-              subtitle: '영어 단어를 보고 한국어 뜻 맞추기',
-              onTap: () => _startTest(TestMode.engToKor),
-            ),
+            if (_quizType == QuizType.selfCheck) ...[
+              _ModeCard(
+                icon: Icons.fact_check_outlined,
+                title: '셀프 체크',
+                subtitle: '영어+한국어 모두 보고 정답/실패 자가 평가',
+                onTap: () => _startTest(TestMode.engToKor),
+              ),
+            ] else ...[
+              _ModeCard(
+                icon: Icons.translate,
+                title: '한 → 영',
+                subtitle: '한국어 뜻을 보고 영어 단어 맞추기',
+                onTap: () => _startTest(TestMode.korToEng),
+              ),
+              const SizedBox(height: 16),
+              _ModeCard(
+                icon: Icons.spellcheck,
+                title: '영 → 한',
+                subtitle: '영어 단어를 보고 한국어 뜻 맞추기',
+                onTap: () => _startTest(TestMode.engToKor),
+              ),
+            ],
           ],
         ),
       ),
@@ -382,6 +408,82 @@ class _TestScreenState extends State<TestScreen> {
                   ),
 
                   const SizedBox(height: 20),
+
+                  // 셀프 체크
+                  if (_quizType == QuizType.selfCheck) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 8, offset: const Offset(0, 2))],
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              GestureDetector(
+                                onTap: () => _tts.speak(_quizEntries[_currentIndex]['word']!),
+                                child: Icon(Icons.volume_up_outlined, size: 18, color: Colors.blue.shade300),
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  _quizEntries[_currentIndex]['word']!,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black87),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          const Divider(),
+                          const SizedBox(height: 12),
+                          Text(
+                            _quizEntries[_currentIndex]['meaning']!,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 17, color: Colors.grey.shade700),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _selfCheck(false),
+                            icon: const Icon(Icons.close, size: 20),
+                            label: const Text('실패', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _red,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              elevation: 0,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _selfCheck(true),
+                            icon: const Icon(Icons.check, size: 20),
+                            label: const Text('정답', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _green,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              elevation: 0,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
 
                   // 객관식
                   if (_quizType == QuizType.multipleChoice) ...[
