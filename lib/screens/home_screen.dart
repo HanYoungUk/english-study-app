@@ -13,7 +13,7 @@ import 'all_words_screen.dart';
 
 const _geminiKey = String.fromEnvironment('GEMINI_KEY');
 const _geminiUrl =
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$_geminiKey';
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$_geminiKey';
 
 List<Map<String, String>> _parseWordEntries(String text) {
   final results = <Map<String, String>>[];
