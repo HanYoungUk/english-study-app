@@ -122,10 +122,10 @@ class _RecordScreenState extends State<RecordScreen> {
 
   bool get _hasRecording => _recordPaths.containsKey(_currentIndex);
 
-  void _goTo(int index) {
-    if (_isRecording) _stopRecording();
-    if (_isPlayingRecord) _stopPlayback();
-    if (_isPlayingTts) _stopTts();
+  Future<void> _goTo(int index) async {
+    if (_isRecording) await _stopRecording();
+    if (_isPlayingRecord) await _stopPlayback();
+    if (_isPlayingTts) await _stopTts();
     setState(() => _currentIndex = index);
   }
 

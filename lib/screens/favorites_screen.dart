@@ -50,16 +50,15 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     }
   }
 
-  Future<void> _remove(int index) async {
-    final item = _items[index];
+  Future<void> _remove(String id) async {
     try {
       await _db
           .collection('favorites')
           .doc(_person)
           .collection('words')
-          .doc(item['id'] as String)
+          .doc(id)
           .delete();
-      if (mounted) setState(() => _items.removeAt(index));
+      if (mounted) setState(() => _items.removeWhere((e) => e['id'] == id));
     } catch (_) {}
   }
 
@@ -171,7 +170,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                             return Dismissible(
                               key: Key(item['id'] as String),
                               direction: DismissDirection.endToStart,
-                              onDismissed: (_) => _remove(i),
+                              onDismissed: (_) => _remove(item['id'] as String),
                               background: Container(
                                 alignment: Alignment.centerRight,
                                 padding:

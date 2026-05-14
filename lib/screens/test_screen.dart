@@ -233,8 +233,24 @@ class _TestScreenState extends State<TestScreen> {
             // 주관식 / 객관식 토글
             _buildToggleRow([
               _ToggleItem(label: '주관식', icon: Icons.edit_outlined, selected: _quizType == QuizType.subjective, onTap: () => setState(() => _quizType = QuizType.subjective)),
-              _ToggleItem(label: '객관식', icon: Icons.checklist, selected: _quizType == QuizType.multipleChoice, onTap: () => setState(() => _quizType = QuizType.multipleChoice)),
+              _ToggleItem(
+                label: '객관식',
+                icon: Icons.checklist,
+                selected: _quizType == QuizType.multipleChoice,
+                onTap: _validEntries.length >= 4
+                    ? () => setState(() => _quizType = QuizType.multipleChoice)
+                    : null,
+                disabled: _validEntries.length < 4,
+              ),
             ]),
+            if (_validEntries.length < 4)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  '객관식은 단어 4개 이상일 때 사용 가능해요',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                ),
+              ),
 
             const SizedBox(height: 24),
             _ModeCard(
@@ -267,20 +283,28 @@ class _TestScreenState extends State<TestScreen> {
       child: Row(
         children: items.map((item) => Expanded(
           child: GestureDetector(
-            onTap: item.onTap,
+            onTap: item.disabled ? null : item.onTap,
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
               padding: const EdgeInsets.symmetric(vertical: 12),
               decoration: BoxDecoration(
-                color: item.selected ? _blue : Colors.transparent,
+                color: item.disabled
+                    ? Colors.transparent
+                    : item.selected ? _blue : Colors.transparent,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(item.icon, size: 16, color: item.selected ? Colors.white : Colors.grey.shade500),
+                  Icon(item.icon, size: 16,
+                      color: item.disabled
+                          ? Colors.grey.shade300
+                          : item.selected ? Colors.white : Colors.grey.shade500),
                   const SizedBox(width: 6),
-                  Text(item.label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: item.selected ? Colors.white : Colors.grey.shade500)),
+                  Text(item.label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
+                      color: item.disabled
+                          ? Colors.grey.shade300
+                          : item.selected ? Colors.white : Colors.grey.shade500)),
                 ],
               ),
             ),
@@ -659,8 +683,9 @@ class _ToggleItem {
   final String label;
   final IconData icon;
   final bool selected;
-  final VoidCallback onTap;
-  const _ToggleItem({required this.label, required this.icon, required this.selected, required this.onTap});
+  final VoidCallback? onTap;
+  final bool disabled;
+  const _ToggleItem({required this.label, required this.icon, required this.selected, this.onTap, this.disabled = false});
 }
 
 class _ModeCard extends StatelessWidget {
