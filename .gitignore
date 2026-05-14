@@ -10,3 +10,4 @@ ios/Pods/
 .idea/
 .vscode/
 env.json
+.firebase/
