@@ -1,8 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // 앱에서 익명 인증을 거친(로그인된) 요청만 허용한다.
+    // 앱 없이 API 키만으로 직접 접근하는 외부 요청은 차단된다.
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if request.auth != null;
     }
   }
 }
